@@ -1,0 +1,278 @@
+---
+title: "prac2"
+output: html_document
+date: "2026-10-21"
+---
+## Load packages
+
+```{r}
+library(tidyverse)
+library(janitor)
+library(tmap)
+library(tmaptools)
+library(sf)
+
+```
+
+## Test objects 
+
+```{r}
+A <- 1
+B <- 2
+C <- A + B
+C
+ls()
+
+```
+
+## Plot and data frames
+
+```{r}
+Data1 <- c(1:100)
+Data2 <- c(101:200)
+plot(Data1, Data2, col = "red")
+
+df <- data.frame(Data1, Data2)
+df %>% head()
+df[1:10, 1]
+df %>% dplyr::rename(column1 = Data1, column2 = Data2) -> df
+df %>% dplyr::select(column1)
+
+```
+
+## Download the data
+
+Here I get the London Ward Profiles Excel file from the London Datastore (I choose the easy route by reading the csv straight from the web using the URL).
+
+```{r}
+LondonData <- read_csv("https://data.london.gov.uk/download/f33fb38c-cb37-48e3-8298-84c0d3cc5a6c/772d2d64-e8c6-46cb-86f9-e52b4c7851bc/ward-profiles-excel-version.csv",
+                       locale = locale(encoding = "latin1"),
+                       na = "n/a")
+
+```
+
+## Check it loaded properly
+
+```{r}
+class(LondonData)
+Datatypelist <- LondonData %>%
+  summarise_all(class) %>%
+  pivot_longer(everything(), names_to = "All_variables", values_to = "Variable_class")
+Datatypelist
+
+```
+
+## Selecte the relevant boroughs
+
+Here I start to manipulate with dplyr.
+
+```{r}
+library(stringr)
+LondonBoroughs <- LondonData %>%
+  filter(str_detect(`New code`, "^E09")) %>%
+  distinct()
+LondonBoroughs$`Ward name`
+
+```
+
+## Rename and tidy the column names
+
+```{r}
+LondonBoroughs <- LondonBoroughs %>%
+  dplyr::rename(Borough = `Ward name`) %>%
+  clean_names()
+colnames(LondonBoroughs)
+
+```
+
+## Calculate life expectancy values
+
+```{r}
+Life_expectancy <- LondonBoroughs %>%
+  mutate(averagelifeexpectancy = (female_life_expectancy_2009_13 + male_life_expectancy_2009_13) / 2) %>%
+  mutate(normalisedlifeepectancy = averagelifeexpectancy / mean(averagelifeexpectancy)) %>%
+  dplyr::select(new_code, borough, averagelifeexpectancy, normalisedlifeepectancy) %>%
+  arrange(desc(normalisedlifeepectancy))
+
+slice_head(Life_expectancy, n = 5)
+slice_tail(Life_expectancy, n = 5)
+
+```
+
+## Compare to the UK average (81.16)
+
+```{r}
+Life_expectancy2 <- Life_expectancy %>%
+  mutate(UKcompare = case_when(averagelifeexpectancy > 81.16 ~ "above UK average",
+                               TRUE ~ "below UK average"))
+
+Life_expectancy2_group <- Life_expectancy2 %>%
+  mutate(UKdiff = averagelifeexpectancy - 81.16) %>%
+  group_by(UKcompare) %>%
+  summarise(range = max(UKdiff) - min(UKdiff), count = n(), Average = mean(UKdiff))
+Life_expectancy2_group
+
+```
+
+## Build version for the map
+
+```{r}
+Life_expectancy4 <- Life_expectancy %>%
+  mutate(UKdiff = averagelifeexpectancy - 81.16) %>%
+  mutate(across(where(is.numeric), \(x) round(x, 3))) %>%
+  mutate(across(UKdiff, \(x) round(x, 0)))
+
+```
+
+## Quick plot
+
+```{r}
+plot(LondonBoroughs$male_life_expectancy_2009_13,
+     LondonBoroughs$percent_children_in_reception_year_who_are_obese_2011_12_to_2013_14)
+
+```
+
+## Read in boundary files
+
+I got the Local Authority Districts (Dec 2015) full clipped boundaries for Great Britain from the ONS Open Geography Portal, as a shapefile. 
+
+```{r}
+EW <- st_read("prac2_data/LAD_Dec_2015_FCB_GB_2022_-5677438911922075002")
+
+```
+
+## Pull out London and plot
+
+```{r}
+LondonMap <- EW %>% filter(str_detect(lad15cd, "^E09"))
+qtm(LondonMap)
+
+```
+
+## Join data to the boundaries
+
+```{r}
+LondonData <- clean_names(LondonData)
+
+BoroughDataMap <- EW %>%
+  clean_names() %>%
+  filter(str_detect(lad15cd, "^E09")) %>%
+  left_join(., LondonData, by = c("lad15cd" = "new_code")) %>%
+  distinct(., lad15cd, .keep_all = TRUE)
+
+nrow(BoroughDataMap)   # should be 33
+
+```
+
+## Quick map
+
+```{r}
+tmap_mode("plot")
+qtm(BoroughDataMap, fill = "rate_of_job_seekers_allowance_jsa_claimants_2015")
+
+```
+
+## Interactive map
+
+```{r}
+BoroughDataMap84 <- BoroughDataMap %>% st_transform(., 4326)
+
+tmap_mode("view")
+tm_shape(BoroughDataMap84) +
+  tm_polygons(fill = "rate_of_job_seekers_allowance_jsa_claimants_2015",
+              fill.scale = tm_scale_intervals(values = "brewer.bu_pu", style = "jenks"),
+              fill_alpha = 0.5,
+              fill.legend = tm_legend(title = "Job seekers' Allowance Claimants", size = 0.8)) +
+  tm_basemap(server = "OpenStreetMap") +
+  tm_title("Job seekers' Allowance Claimants")
+
+```
+
+## Map life expectancy data
+
+```{r}
+Life_expectancy4map <- EW %>%
+  inner_join(., Life_expectancy4, by = c("lad15cd" = "new_code")) %>%
+  distinct(., lad15cd, .keep_all = TRUE)
+
+tmap_mode("plot")
+tm_shape(Life_expectancy4map) +
+  tm_polygons(fill = "UKdiff",
+              fill.scale = tm_scale_intervals(values = "brewer.bu_pu", style = "jenks"),
+              fill_alpha = 0.5,
+              fill.legend = tm_legend(title = "Number of years")) +
+  tm_title("Difference in life expectancy")
+
+```
+
+## Read flytipping data with set column types
+
+This section uses the web version of the flytipping data, not my pivot-table export, because it has the columns code, area, year, total_incidents, and so on.
+
+```{r}
+flytipping1 <- read_csv("https://data.london.gov.uk/download/fly-tipping-incidents/536278ff-a391-4f20-bc79-9e705c9b3ec0/fly-tipping-borough.csv",
+  col_types = cols(
+    code = col_character(), area = col_character(), year = col_character(),
+    total_incidents = col_number(), total_action_taken = col_number(),
+    warning_letters = col_number(), fixed_penalty_notices = col_number(),
+    statutory_notices = col_number(), formal_cautions = col_number(),
+    injunctions = col_number(), prosecutions = col_number()))
+
+```
+
+## Check for error
+
+An error message came up with the last code so I checked for problems to see if any rows or columns didn't match.The usual cause is that the column names or number of columns in my cols() don’t match the file
+
+```{r}
+problems(flytipping1)
+
+```
+
+## Read it with no column types
+
+The error message persisted so I read it with no column types first
+
+```{r}
+flytipping1 <- read_csv("https://data.london.gov.uk/download/fly-tipping-incidents/536278ff-a391-4f20-bc79-9e705c9b3ec0/fly-tipping-borough.csv")
+glimpse(flytipping1)
+
+```
+
+## Set the types afterwards using the real column names from glimpse():
+
+```{r}
+flytipping1 <- flytipping1 %>%
+  mutate(across(c(total_incidents, total_action_taken), parse_number))  # add the other numeric columns you see
+
+```
+
+## Convert the rest of the numeric columns
+
+Finish the job. flytipping1 currently has the first two converted.
+
+```{r}
+flytipping1 <- flytipping1 %>%
+  mutate(across(c(warning_letters, fixed_penalty_notices, statutory_notices,
+                  formal_cautions, injunctions, prosecutions),
+                parse_number))
+
+```
+
+## Make data long then wide
+
+```{r}
+flytipping_long <- flytipping1 %>%
+  pivot_longer(cols = 4:11, names_to = "tipping_type", values_to = "count")
+
+flytipping_wide <- flytipping_long %>%
+  pivot_wider(id_cols = 1:2, names_from = c(year, tipping_type),
+              names_sep = "_", values_from = count)
+
+```
+
+
+
+
+
+

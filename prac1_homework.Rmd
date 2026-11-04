@@ -1,0 +1,79 @@
+## Loading the packages
+
+```{r}
+library(sf)
+library(tidyverse)
+library(tmap)
+library(readxl)
+```
+
+## Loading the boundaries data
+
+Here I load the New Zealand territorial authority boundaries.
+
+```{r}
+nz_shape <- st_read("prac1_data/nz_data/statsnz-territorial-authority-2018-generalised-SHP/territorial-authority-2018-generalised.shp")
+```
+## Loading the census table
+
+Here I load the 2018 census table.
+
+```{r}
+path <- "prac1_data/nz_data/Statistical-Area-1-dataset-for-Census-2018-total-New_Zealand_updated_4-11-21/2018-SA1-dataset-individual-part-3a-total-NZ_updated_16-7-20.xlsx"
+
+raw <- read_excel(path, sheet = "Territorial authority", col_names = FALSE)
+```
+
+## Building
+
+```{r}
+hdr <- tibble(year = unlist(raw[9, ]), measure = unlist(raw[10, ])) %>% fill(year)
+nz_data <- raw[-(1:10), ]
+names(nz_data) <- paste(hdr$year, hdr$measure, sep = "_")
+names(nz_data)[1:2] <- c("ta_code", "ta_name")
+```
+
+## Building 2
+
+
+```{r}
+col2018 <- names(nz_data)[startsWith(names(nz_data), "2018") &
+                          endsWith(names(nz_data), "_Paid employee")]
+```
+
+## Identifying relevant data
+
+```{r}
+nz_employees <- nz_data %>%
+  filter(ta_code != "Total") %>%
+  select(ta_code, paid_employee_2018 = all_of(col2018)) %>%
+  mutate(paid_employee_2018 = as.numeric(paid_employee_2018))
+```
+
+## Joining and mapping
+
+I join the paid employee counts to the boundaries using the territorial authority code.
+
+```{r}
+nz_map <- nz_shape %>%
+  left_join(., nz_employees, by = c("TA2018_V1_" = "ta_code"))
+nrow(nz_map)
+sum(is.na(nz_map$paid_employee_2018))
+```
+
+## Reprojecting to New Zealand's own coordinate system
+
+New Zealand's Chatham Islands lie across the 180° line, which stretches a latitude/longitude map across the globe and shrinks the mainland. I reproject to NZTM 2000 (EPSG:2193), New Zealand's own coordinate system, so the map fills the frame.
+
+```{r}
+nz_map_nztm <- nz_map %>% st_transform(., 2193)
+```
+
+## Map of paid employees
+
+````{r}
+tm_shape(nz_map_nztm) +
+  tm_polygons(fill = "paid_employee_2018",
+              fill.legend = tm_legend(title = "Paid employees, 2018")) +
+  tm_title("Paid employees by territorial authority, New Zealand, 2018")
+````

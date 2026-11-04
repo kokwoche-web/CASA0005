@@ -1,0 +1,6 @@
+prac*_data/
+.DS_Store
+.Rproj.user
+.Rhistory
+.RData
+week*_data/

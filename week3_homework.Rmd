@@ -1,0 +1,156 @@
+---
+title: "prac3"
+output: html_document
+date: "2026-11-02"
+---
+
+## Load library
+
+```{r}
+library(sf)
+library(tidyverse)
+library(terra)
+library(fs)
+library(tidyterra)
+library(plotly)
+```
+
+## Load rasters
+
+```{r}
+ssp1 <- terra::rast("week3_data/wc2.1_10m_tmax_ACCESS-CM2_ssp126_2081-2100.tif")
+ssp5 <- terra::rast("week3_data/wc2.1_10m_tmax_ACCESS-CM2_ssp585_2081-2100.tif")
+month <- c("Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec")
+names(ssp1) <- month
+names(ssp5) <- month
+names(ssp1) <- month
+names(ssp5) <- month
+```
+
+## Load country file
+
+```{r}
+cities <- st_read("week3_data/World_Cities/World_Cities.shp")
+names(cities)
+head(cities)
+```
+
+## Filter to Australia
+
+```{r}
+country_cities <- cities %>% filter(CNTRY_NAME == "Australia")
+```
+
+## Make sure the CRS matches your rasters
+
+```{r}
+st_crs(country_cities)
+```
+
+## Attatch the city names and pivot long for ssp1
+
+Attach the city names, so each row is labelled.
+Pivot long, so instead of 12 month columns you get one Month column and one Temp column. This makes it easy to group, join and plot later.
+
+```{r}
+city_ssp1 <- terra::extract(ssp1, terra::vect(country_cities))
+city_ssp5 <- terra::extract(ssp5, terra::vect(country_cities))
+```
+
+## Attatch the city names and pivot long
+
+Attach the city names, so each row is labelled.
+Pivot long, so instead of 12 month columns you get one Month column and one Temp column. This makes it easy to group, join and plot later.
+drop_na() matters because a city on a coastal cell can return NA, and max() of all NAs gives -Inf.
+
+```{r}
+ssp1_long <- city_ssp1 %>%
+  as_tibble() %>%
+  mutate(City = country_cities$CITY_NAME) %>%
+  dplyr::select(-ID) %>%
+  pivot_longer(cols = Jan:Dec, names_to = "Month", values_to = "Temp") %>%
+  drop_na()
+
+ssp5_long <- city_ssp5 %>%
+  as_tibble() %>%
+  mutate(City = country_cities$CITY_NAME) %>%
+  dplyr::select(-ID) %>%
+  pivot_longer(cols = Jan:Dec, names_to = "Month", values_to = "Temp") %>%
+  drop_na()
+```
+
+## Define "maximum"
+
+Maximum temperature is defined as each city’s highest monthly mean daily maximum temperature in 2081-2100. Note that WorldClim’s tmax is already an average, so this is the hottest month’s average, not an absolute record.
+
+```{r}
+max_ssp1 <- ssp1_long %>% group_by(City) %>% summarise(SSP1 = max(Temp))
+max_ssp5 <- ssp5_long %>% group_by(City) %>% summarise(SSP5 = max(Temp))
+```
+
+I defined maximum temperature as each city’s hottest month under each scenario, giving one value per city per scenario. I chose this because it captures peak heat exposure.
+
+## Calculate the difference
+
+Join the two scenarios by city and compute SSP5 - SSP1
+
+```{r}
+diff_df <- max_ssp1 %>%
+  inner_join(max_ssp5, by = "City") %>%
+  mutate(Difference = SSP5 - SSP1)
+
+diff_df
+```
+
+## Descriptive statistics
+
+```{r}
+diff_df %>%
+  summarise(mean = mean(Difference),
+            sd = sd(Difference),
+            min = min(Difference),
+            max = max(Difference),
+            IQR = IQR(Difference))
+```
+
+## Histogram of differences plot
+
+```{r}
+ggplot(diff_df, aes(x = Difference)) +
+  geom_histogram(color = "black", fill = "white", binwidth = 0.5) +
+  geom_vline(aes(xintercept = mean(Difference)),
+             color = "blue", linetype = "dashed", linewidth = 1) +
+  labs(title = "Difference in maximum temperature, SSP5 minus SSP1 (2081-2100)",
+       x = "Difference (°C)", y = "Frequency") +
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+## Bar chart per city plot
+
+```{r}
+ggplot(diff_df, aes(x = reorder(City, Difference), y = Difference)) +
+  geom_col(fill = "firebrick") +
+  coord_flip() +
+  labs(title = "SSP5 minus SSP1 maximum temperature by city",
+       x = "City", y = "Difference (°C)") +
+  theme_classic()
+```
+
+## SSP1 vs SSP5 side by side
+
+```{r}
+both <- diff_df %>%
+  pivot_longer(cols = c(SSP1, SSP5), names_to = "Scenario", values_to = "MaxTemp")
+
+means <- both %>% group_by(Scenario) %>% summarise(mean = mean(MaxTemp))
+
+ggplot(both, aes(x = MaxTemp, color = Scenario, fill = Scenario)) +
+  geom_histogram(position = "identity", alpha = 0.5, binwidth = 1) +
+  geom_vline(data = means, aes(xintercept = mean, color = Scenario), linetype = "dashed") +
+  labs(title = "Maximum temperature by scenario, 2081-2100",
+       x = "Temperature (°C)", y = "Frequency") +
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
