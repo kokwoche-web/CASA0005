@@ -1,0 +1,85 @@
+---
+title: "week4_homework"
+output: html_document
+date: "2026-11-05"
+---
+
+## Load packages
+
+```{r}
+library(tidyverse)
+library(sf)
+library(tmap)
+library(countrycode)
+```
+
+## Read inequality data and inspect it
+
+```{r}
+gii <- read_csv("week4_data/HDR25_Composite_indices_complete_time_series.csv")
+names(gii)
+glimpse(gii)
+```
+
+## Calculate the difference
+
+I calculated the change as 2019 minus 2010. GII runs from 0 (full equality) to 1 (greatest inequality), so a negative value means inequality fell.
+
+```{r}
+gii2 <- gii %>%
+  select(iso3, gii_2010, gii_2019) %>%
+  mutate(gii_diff = gii_2019 - gii_2010)
+```
+
+## Check for NA's
+
+```{r}
+summary(gii2)
+```
+
+## Read in the world map and find its country code
+
+I read in the world spatial data. The two datasets used different country codes, so I used countrycode to convert the map’s [2-letter] codes to [3-letter] ISO codes so they would match.
+
+```{r}
+world <- st_read("week4_data/World_Countries_(Generalized)_2173680399808997149.geojson")
+names(world)
+head(world)
+```
+
+## Align country codes
+
+The inequality file and the map use different country codes (2-letter codes vs 3-letter like GBR). So they will need to be converted and made into a matching column:
+
+```{r}
+world <- world %>%
+  mutate(iso3 = countrycode(ISO, origin = "iso2c", destination = "iso3c"))
+
+head(world$iso3)
+```
+
+## Join and check
+
+I joined the inequality data to the world map by ISO code with left_join(). [X] of [Y] countries had no GII difference, mostly [small territories / countries missing 2010 or 2019 data].
+
+```{r}
+world_gii <- world %>%
+  left_join(., gii2, by = "iso3")
+
+nrow(world_gii)
+sum(is.na(world_gii$gii_diff))
+```
+
+I joined the inequality data to the world map by ISO code with left_join(). 94 of 251 countries had no GII difference. Most are small territories and dependencies (for example American Samoa, Aruba and Bermuda) or Antarctica, which the UNDP data doesn’t cover. A few countries, such as Bosnia and Herzegovina, have a 2019 value but no 2010 value, so no difference could be calculated.
+
+## Map the difference
+
+```{r}
+tmap_mode("plot")
+tm_shape(world_gii) +
+  tm_polygons(fill = "gii_diff",
+              fill.legend = tm_legend(title = "Change in GII, 2010 to 2019")) +
+  tm_title("Change in gender inequality, 2010 to 2019")
+```
+
+The map shows the change in GII between 2010 and 2019. Darker purple areas show larger falls in inequality. Overall, inequality fell in 148 of the countries with data and rose in only 9. Qatar shows the largest fall at -0.501, followed by Saudi Arabia (-0.471) and Tonga (-0.317). The largest rises were in Vanuatu (+0.261) and Papua New Guinea (+0.134).
